@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>브챗 파츠 보관함 🎀</title>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Single+Day&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            pink: {
+              50: '#fff1f2',
+              100: '#ffe4e6',
+              200: '#fecdd3',
+              300: '#fda4af',
+              400: '#fb7185',
+              500: '#f43f5e',
+              600: '#e11d48',
+            }
+          },
+          fontFamily: {
+            title: ['"Single Day"', 'cursive', 'sans-serif'],
+            body: ['"Gowun Dodum"', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- React & Babel CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase Compat CDN -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    body {
+      font-family: 'Gowun Dodum', sans-serif;
+      background-color: #fff1f2;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .font-title {
+      font-family: 'Single Day', cursive;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #fff1f2;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #fecdd3;
+      border-radius: 9999px;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .animate-slide-up {
+      animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+</head>
+<body class="text-gray-800 antialiased selection:bg-pink-200 selection:text-pink-700 min-h-screen flex flex-col items-center">
+  <div id="root" class="w-full flex-1 flex flex-col items-center"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // 파이어베이스 설정
+    const firebaseConfig = {
+      apiKey: "AIzaSyBCK1YokhU96N6OlX4L2Fo8Ve3V0x095nk",
+      authDomain: "some-4ebc6.firebaseapp.com",
+      projectId: "some-4ebc6",
+      storageBucket: "some-4ebc6.firebasestorage.app",
+      messagingSenderId: "936494594176",
+      appId: "1:936494594176:web:a629bde8d865fd2cca8e65",
+      measurementId: "G-QNZS3T0GMN"
+    };
+
+    let dbInstance = null;
+    try {
+      if (typeof firebase !== 'undefined') {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(firebaseConfig);
+        }
+        dbInstance = firebase.firestore();
+      }
+    } catch (e) {
+      console.warn("Firebase Init Warning:", e);
+    }
+
+    const QUICK_AVATARS = ["마누카", "시나노", "셀레스티아", "라임", "키키", "공용"];
+    const CATEGORIES = ["헤어", "의상", "악세", "메이크업 및 렌즈"];
+
+    const formatBoothUrl = (input) => {
+      if (!input) return "";
+      const trimmed = input.trim();
+      if (/^\d+$/.test(trimmed)) {
+        return `https://booth.pm/ja/items/${trimmed}`;
+      }
+      if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+        return `https://${trimmed}`;
+      }
+      return trimmed;
+    };
+
+    function App() {
+      const [items, setItems] = useState([]);
+      const [isLoading, setIsLoading] = useState(true);
+      const [isAdmin, setIsAdmin] = useState(false);
+      const [filterStatus, setFilterStatus] = useState("ALL");
+      const [selectedCategory, setSelectedCategory] = useState("ALL");
+      const [searchAvatar, setSearchAvatar] = useState("");
+      const [isModalOpen, setIsModalOpen] = useState(false);
+      const [editingItem, setEditingItem] = useState(null);
+      const [toastMsg, setToastMsg] = useState("");
+      const [isSubmitting, setIsSubmitting] = useState(false);
+
+      // 폼 입력 상태
+      const [formAvatar, setFormAvatar] = useState("");
+      const [formCategory, setFormCategory] = useState("의상");
+      const [formOwned, setFormOwned] = useState(true);
+      const [formLink, setFormLink] = useState("");
+      const [formImageUrl, setFormImageUrl] = useState("");
+
+      // 실시간 데이터 동기화 (Firestore)
+      useEffect(() => {
+        if (!dbInstance) {
+          setIsLoading(false);
+          return;
+        }
+
+        const unsubscribe = dbInstance.collection("vrc_parts")
+          .orderBy("createdAt", "desc")
+          .onSnapshot((snapshot) => {
+            const loaded = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setItems(loaded);
+            setIsLoading(false);
+          }, (err) => {
+            console.error("Firestore sync error:", err);
+            setIsLoading(false);
+          });
+
+        return () => unsubscribe();
+      }, []);
+
+      const showToast = (msg) => {
+        setToastMsg(msg);
+        setTimeout(() => setToastMsg(""), 2500);
+      };
+
+      const openModal = (item = null) => {
+        setIsSubmitting(false);
+        if (item) {
+          setEditingItem(item);
+          setFormAvatar(item.avatar || "");
+          setFormCategory(item.category || "의상");
+          setFormOwned(item.owned ?? true);
+          setFormLink(item.link || "");
+          setFormImageUrl(item.imageUrl || "");
+        } else {
+          setEditingItem(null);
+          setFormAvatar("");
+          setFormCategory("의상");
+          setFormOwned(true);
+          setFormLink("");
+          setFormImageUrl("");
+        }
+        setIsModalOpen(true);
+      };
+
+      const closeModal = () => {
+        setIsModalOpen(false);
+        setEditingItem(null);
+        setIsSubmitting(false);
+      };
+
+      // 이미지 URL 입력 또는 안전한 주소 반영
+      const handleImageUrlChange = (e) => {
+        setFormImageUrl(e.target.value);
+      };
+
+      // 등록 및 수정 제출 (실시간 서버 동기화)
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (isSubmitting) return;
+        setIsSubmitting(true);
+
+        const formattedLink = formatBoothUrl(formLink);
+        const itemData = {
+          avatar: formAvatar.trim() || "미정",
+          category: formCategory,
+          owned: formOwned,
+          link: formattedLink,
+          imageUrl: formImageUrl.trim() || "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=400&auto=format&fit=crop&q=80"
+        };
+
+        try {
+          if (dbInstance) {
+            if (editingItem) {
+              await dbInstance.collection("vrc_parts").doc(editingItem.id).update(itemData);
+              showToast("✨ 파츠 정보가 수정되었습니다!");
+            } else {
+              await dbInstance.collection("vrc_parts").add({ ...itemData, createdAt: Date.now() });
+              showToast("🎀 새 파츠가 보관함에 저장되었습니다!");
+            }
+          } else {
+            showToast("⚠️ 데이터베이스 연결을 확인해주세요.");
+          }
+          closeModal();
+        } catch (err) {
+          console.error("Save Error:", err);
+          showToast("❌ 저장 중 오류가 발생했습니다.");
+        } finally {
+          setIsSubmitting(false);
+        }
+      };
+
+      // 삭제
+      const handleDelete = async (id) => {
+        if (!confirm("정말 이 파츠를 삭제하시겠습니까?")) return;
+
+        try {
+          if (dbInstance) {
+            await dbInstance.collection("vrc_parts").doc(id).delete();
+            showToast("🗑️ 파츠가 삭제되었습니다.");
+            closeModal();
+          }
+        } catch (err) {
+          showToast("❌ 삭제에 실패했습니다.");
+        }
+      };
+
+      // 보유 상태 원터치 토글 (실시간 반영)
+      const toggleOwned = async (id, currentOwned, e) => {
+        e.stopPropagation();
+        const nextOwned = !currentOwned;
+        try {
+          if (dbInstance) {
+            await dbInstance.collection("vrc_parts").doc(id).update({ owned: nextOwned });
+            showToast(nextOwned ? "💖 '보유중'으로 변경되었습니다!" : "🛍️ '미보유'로 변경되었습니다!");
+          }
+        } catch (err) {
+          console.error("Toggle Error:", err);
+        }
+      };
+
+      const handleLinkClick = (link, avatar, e) => {
+        e.stopPropagation();
+        const targetLink = formatBoothUrl(link);
+        if (targetLink) {
+          window.open(targetLink, '_blank', 'noopener,noreferrer');
+        } else {
+          const searchUrl = `https://booth.pm/ja/search/${encodeURIComponent(avatar)}`;
+          window.open(searchUrl, '_blank', 'noopener,noreferrer');
+        }
+      };
+
+      const filteredItems = useMemo(() => {
+        return items.filter(item => {
+          if (filterStatus === "OWNED" && !item.owned) return false;
+          if (filterStatus === "UNOWNED" && item.owned) return false;
+          if (selectedCategory !== "ALL" && item.category !== selectedCategory) return false;
+          if (searchAvatar && !item.avatar.toLowerCase().includes(searchAvatar.toLowerCase())) return false;
+          return true;
+        });
+      }, [items, filterStatus, selectedCategory, searchAvatar]);
+
+      const stats = useMemo(() => {
+        const total = items.length;
+        const ownedCount = items.filter(i => i.owned).length;
+        const unownedCount = total - ownedCount;
+        return { total, ownedCount, unownedCount };
+      }, [items]);
+
+      return (
+        <div className="w-full max-w-xl min-h-screen bg-pink-50/50 shadow-2xl relative border-x border-pink-100 flex flex-col justify-between pb-24">
+          
+          {/* 헤더 */}
+          <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-pink-100 px-4 py-3 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">🎀</span>
+              <h1 className="font-title text-2xl font-bold text-pink-600 tracking-wide">
+                브챗 파츠 보관함
+              </h1>
+            </div>
+
+            <button
+              onClick={() => {
+                setIsAdmin(!isAdmin);
+                showToast(isAdmin ? "🔒 관리자 모드가 꺼졌습니다." : "🔓 관리자 모드가 활성화되었습니다.");
+              }}
+              className={`text-xs px-3.5 py-1.5 rounded-full font-medium transition-all duration-200 flex items-center gap-1.5 ${
+                isAdmin 
+                  ? "bg-pink-500 text-white shadow-md shadow-pink-200 font-bold scale-105" 
+                  : "bg-pink-100 text-pink-600 hover:bg-pink-200"
+              }`}
+            >
+              <span>{isAdmin ? "⚙️ 관리자 On" : "🔒 관리자 Off"}</span>
+            </button>
+          </header>
+
+          {/* 메인 콘텐츠 */}
+          <main className="p-4 space-y-4 flex-1">
+
+            {/* 통계 카드 */}
+            <div className="bg-white rounded-2xl p-4 shadow-sm border border-pink-100 flex justify-between items-center text-center">
+              <div className="flex-1">
+                <p className="text-xs text-gray-400 font-medium">전체 파츠</p>
+                <p className="font-title text-xl text-gray-700 mt-0.5">{stats.total}개</p>
+              </div>
+              <div className="w-px h-8 bg-pink-100"></div>
+              <div className="flex-1">
+                <p className="text-xs text-pink-500 font-medium">💖 보유중</p>
+                <p className="font-title text-xl text-pink-600 font-bold mt-0.5">{stats.ownedCount}개</p>
+              </div>
+              <div className="w-px h-8 bg-pink-100"></div>
+              <div className="flex-1">
+                <p className="text-xs text-gray-400 font-medium">🛍️ 미보유</p>
+                <p className="font-title text-xl text-gray-500 mt-0.5">{stats.unownedCount}개</p>
+              </div>
+            </div>
+
+            {/* 필터 및 칩 영역 */}
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-1.5 bg-pink-100/60 p-1 rounded-xl text-sm font-medium">
+                <button
+                  onClick={() => setFilterStatus("ALL")}
+                  className={`py-1.5 rounded-lg transition-all ${
+                    filterStatus === "ALL" ? "bg-white text-pink-600 shadow-sm font-bold" : "text-gray-500 hover:text-pink-500"
+                  }`}
+                >
+                  전체보기
+                </button>
+                <button
+                  onClick={() => setFilterStatus("OWNED")}
+                  className={`py-1.5 rounded-lg transition-all ${
+                    filterStatus === "OWNED" ? "bg-white text-pink-600 shadow-sm font-bold" : "text-gray-500 hover:text-pink-500"
+                  }`}
+                >
+                  💖 보유중
+                </button>
+                <button
+                  onClick={() => setFilterStatus("UNOWNED")}
+                  className={`py-1.5 rounded-lg transition-all ${
+                    filterStatus === "UNOWNED" ? "bg-white text-pink-600 shadow-sm font-bold" : "text-gray-500 hover:text-pink-500"
+                  }`}
+                >
+                  🛍️ 미보유
+                </button>
+              </div>
+
+              {/* 카테고리 필터 칩 */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar">
+                <button
+                  onClick={() => setSelectedCategory("ALL")}
+                  className={`px-3 py-1 rounded-full whitespace-nowrap transition-all border ${
+                    selectedCategory === "ALL" 
+                      ? "bg-pink-500 text-white border-pink-500 font-bold shadow-sm" 
+                      : "bg-white text-gray-600 border-pink-100 hover:bg-pink-50"
+                  }`}
+                >
+                  📂 모든 부위
+                </button>
+                {CATEGORIES.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setSelectedCategory(selectedCategory === cat ? "ALL" : cat)}
+                    className={`px-3 py-1 rounded-full whitespace-nowrap transition-all border ${
+                      selectedCategory === cat 
+                        ? "bg-pink-500 text-white border-pink-500 font-bold shadow-sm" 
+                        : "bg-white text-gray-600 border-pink-100 hover:bg-pink-50"
+                    }`}
+                  >
+                    ✨ {cat}
+                  </button>
+                ))}
+              </div>
+
+              {/* 아바타 빠른 검색 칩 */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar">
+                <span className="text-[11px] text-gray-400 pl-1 font-medium whitespace-nowrap">아바타:</span>
+                <button
+                  onClick={() => setSearchAvatar("")}
+                  className={`px-2.5 py-0.5 rounded-full whitespace-nowrap transition-all border ${
+                    searchAvatar === "" 
+                      ? "bg-gray-700 text-white border-gray-700 font-bold shadow-sm" 
+                      : "bg-white text-gray-500 border-pink-100 hover:bg-pink-50"
+                  }`}
+                >
+                  전체
+                </button>
+                {QUICK_AVATARS.map(av => (
+                  <button
+                    key={av}
+                    onClick={() => setSearchAvatar(searchAvatar === av ? "" : av)}
+                    className={`px-2.5 py-0.5 rounded-full whitespace-nowrap transition-all border ${
+                      searchAvatar === av 
+                        ? "bg-gray-700 text-white border-gray-700 font-bold shadow-sm" 
+                        : "bg-white text-gray-500 border-pink-100 hover:bg-pink-50"
+                    }`}
+                  >
+                    #{av}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 카드 리스트 */}
+            {isLoading ? (
+              <div className="py-16 text-center text-pink-400 font-title text-lg animate-pulse">
+                💖 실시간 파츠 보관함 연결 중...
+              </div>
+            ) : filteredItems.length === 0 ? (
+              <div className="bg-white rounded-2xl p-10 text-center border border-pink-100 my-8">
+                <span className="text-4xl block mb-2">🧺</span>
+                <p className="font-title text-lg text-gray-500">등록된 파츠가 없어요!</p>
+                <p className="text-xs text-gray-400 mt-1">하단의 + 버튼을 눌러 파츠를 보관함에 담아보세요.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {filteredItems.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => isAdmin && openModal(item)}
+                    className={`bg-white rounded-2xl overflow-hidden border border-pink-100 shadow-sm hover:shadow-md transition-all flex flex-col justify-between relative group ${
+                      isAdmin ? "cursor-pointer ring-2 ring-transparent hover:ring-pink-300" : ""
+                    }`}
+                  >
+                    <div className="relative aspect-square bg-pink-50 overflow-hidden">
+                      <img
+                        src={item.imageUrl}
+                        alt={item.avatar}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        onError={(e) => {
+                          e.target.src = "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=400&auto=format&fit=crop&q=80";
+                        }}
+                      />
+                      
+                      <button
+                        onClick={(e) => toggleOwned(item.id, item.owned, e)}
+                        className={`absolute top-2 left-2 px-2.5 py-1 rounded-full text-xs font-bold backdrop-blur-md shadow-sm transition-transform active:scale-90 ${
+                          item.owned 
+                            ? "bg-pink-500/90 text-white" 
+                            : "bg-gray-800/70 text-white"
+                        }`}
+                      >
+                        {item.owned ? "💖 보유중" : "🛍️ 미보유"}
+                      </button>
+
+                      <span className="absolute bottom-2 left-2 bg-white/90 backdrop-blur-sm text-pink-600 px-2 py-0.5 rounded-md text-[10px] font-bold shadow-sm">
+                        {item.category || "의상"}
+                      </span>
+
+                      {isAdmin && (
+                        <span className="absolute top-2 right-2 bg-white/90 text-pink-600 p-1.5 rounded-full text-xs shadow-sm">
+                          ✏️
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="p-2.5 flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-gray-700 truncate max-w-[120px]">
+                          👤 {item.avatar}
+                        </span>
+                      </div>
+
+                      <button
+                        onClick={(e) => handleLinkClick(item.link, item.avatar, e)}
+                        className="w-full mt-1 bg-pink-100 hover:bg-pink-500 text-pink-600 hover:text-white py-1.5 px-2 rounded-xl text-xs font-title font-bold transition-colors flex items-center justify-center gap-1 active:scale-95"
+                      >
+                        <span>BOOTH 바로가기</span>
+                        <span>↗</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </main>
+
+          {/* 하단 고정 등록 버튼 */}
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-full max-w-xl px-4 z-20 pointer-events-none">
+            <button
+              onClick={() => openModal()}
+              className="pointer-events-auto w-full bg-pink-500 hover:bg-pink-600 active:scale-98 text-white py-3.5 rounded-2xl font-title text-xl font-bold shadow-lg shadow-pink-300/60 flex items-center justify-center gap-2 transition-all"
+            >
+              <span>✨ 새 파츠 등록하기</span>
+            </button>
+          </div>
+
+          {/* 등록 / 수정 모달 */}
+          {isModalOpen && (
+            <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+              <div 
+                className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 animate-slide-up max-h-[90vh] overflow-y-auto border-t sm:border border-pink-100 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex justify-between items-center border-b border-pink-100 pb-3">
+                  <h2 className="font-title text-2xl font-bold text-pink-600">
+                    {editingItem ? "🎀 파츠 정보 수정" : "🎀 새 파츠 등록"}
+                  </h2>
+                  <button
+                    onClick={closeModal}
+                    className="w-8 h-8 rounded-full bg-pink-50 text-gray-400 hover:text-gray-600 flex items-center justify-center text-lg"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  {/* 1. 썸네일 이미지 링크 */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-600">1. 썸네일 이미지 링크 (URL)</label>
+                    <div className="flex gap-2 items-center">
+                      <div className="w-16 h-16 rounded-xl bg-pink-50 border border-pink-200 overflow-hidden flex-shrink-0 relative">
+                        {formImageUrl ? (
+                          <img src={formImageUrl} className="w-full h-full object-cover" onError={(e)=>{e.target.src="https://images.unsplash.com/photo-1534447677768-be436bb09401?w=400&auto=format&fit=crop&q=80"}} />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-pink-300 text-xs">No Img</div>
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <input
+                          type="text"
+                          placeholder="BOOTH 상품 이미지 주소 복사 붙여넣기"
+                          value={formImageUrl}
+                          onChange={handleImageUrlChange}
+                          className="w-full px-3 py-2 bg-pink-50/50 border border-pink-200 rounded-xl text-xs focus:outline-none focus:border-pink-500"
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">💡 부스 상품 페이지의 사진을 우클릭하여 '이미지 주소 복사' 후 붙여넣으세요!</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. 카테고리 선택 */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-600">2. 카테고리 (부위)</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {CATEGORIES.map(cat => (
+                        <button
+                          key={cat}
+                          type="button"
+                          onClick={() => setFormCategory(cat)}
+                          className={`py-2 rounded-xl text-xs font-bold transition-all border ${
+                            formCategory === cat 
+                              ? "bg-pink-500 text-white border-pink-500 shadow-sm" 
+                              : "bg-white text-gray-600 border-pink-100 hover:bg-pink-50"
+                          }`}
+                        >
+                          {cat}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 3. 보유 유무 */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-600">3. 보유 유무</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormOwned(true)}
+                        className={`py-2 rounded-xl text-xs font-bold transition-all border ${
+                          formOwned 
+                            ? "bg-pink-500 text-white border-pink-500 shadow-sm" 
+                            : "bg-white text-gray-500 border-pink-100 hover:bg-pink-50"
+                        }`}
+                      >
+                        💖 보유중
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormOwned(false)}
+                        className={`py-2 rounded-xl text-xs font-bold transition-all border ${
+                          !formOwned 
+                            ? "bg-gray-800 text-white border-gray-800 shadow-sm" 
+                            : "bg-white text-gray-500 border-pink-100 hover:bg-pink-50"
+                        }`}
+                      >
+                        🛍️ 미보유 (위시)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 4. 적용 아바타 */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-600">4. 적용 아바타</label>
+                    <input
+                      type="text"
+                      placeholder="예: 마누카, 시나노, 공용"
+                      value={formAvatar}
+                      onChange={(e) => setFormAvatar(e.target.value)}
+                      className="w-full px-3 py-2 bg-pink-50/50 border border-pink-200 rounded-xl text-xs focus:outline-none focus:border-pink-500"
+                      required
+                    />
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {QUICK_AVATARS.map(av => (
+                        <button
+                          key={av}
+                          type="button"
+                          onClick={() => setFormAvatar(av)}
+                          className="px-2 py-0.5 bg-pink-100 hover:bg-pink-200 text-pink-700 rounded-md text-[11px]"
+                        >
+                          +{av}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 5. 부스 링크 */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-600">5. BOOTH 링크 (또는 상품번호)</label>
+                    <input
+                      type="text"
+                      placeholder="예: https://booth.pm/ja/items/5000000 또는 5000000"
+                      value={formLink}
+                      onChange={(e) => setFormLink(e.target.value)}
+                      className="w-full px-3 py-2 bg-pink-50/50 border border-pink-200 rounded-xl text-xs focus:outline-none focus:border-pink-500"
+                    />
+                  </div>
+
+                  <div className="pt-2 space-y-2">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="w-full bg-pink-500 hover:bg-pink-600 active:scale-98 text-white py-3 rounded-xl font-title text-lg font-bold shadow-md shadow-pink-200 transition-all disabled:opacity-50"
+                    >
+                      {isSubmitting ? "저장 중..." : (editingItem ? "수정 완료하기" : "등록 완료하기")}
+                    </button>
+                    
+                    {editingItem && (
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(editingItem.id)}
+                        className="w-full bg-gray-100 hover:bg-red-50 text-red-500 py-2 rounded-xl text-xs font-bold transition-colors"
+                      >
+                        🗑️ 이 파츠 삭제하기
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* 토스트 알림 */}
+          {toastMsg && (
+            <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-gray-800/90 text-white text-xs px-4 py-2 rounded-full shadow-lg backdrop-blur-sm animate-bounce font-medium">
+              {toastMsg}
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
